@@ -1,0 +1,11 @@
+version: '3.7'
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    command: ["--log-level=debug"]
+    environment:
+      JAEGER_REPORTER_LOG_SPANS: "true"
+    ports:
+      - "6831:6831/udp"
+      - "14268:14268"
+      - "16686:16686"
