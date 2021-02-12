@@ -43,7 +43,7 @@ fun Application.module(testing: Boolean = false) {
     install(DoubleReceive)
 
     install(OpenCensusTracer) {
-        requestBody = true
+        loggingRequestBody = true
         filter = { call ->
             val path = call.request.path()
             when {

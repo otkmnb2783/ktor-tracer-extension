@@ -15,14 +15,15 @@ import io.opencensus.trace.samplers.*
 
 class OpenCensusTracer(
     private val filter: (ApplicationCall) -> Boolean,
-    private val spanName: (ApplicationCall, RoutingPath) -> String,
+    private val spanNameHandler: (ApplicationCall, RoutingPath) -> String,
     private var requestAttributeHandler: ((ApplicationCall, Span) -> Unit)?,
     private val responseAttributeHandler: ((ApplicationCall, Span) -> Unit)?,
-    private val requestBody: Boolean
+    private val loggingRequestBody: Boolean
 ) {
 
     class Configuration {
         var sampler: Sampler = Samplers.alwaysSample()
+        var loggingRequestBody = false
         var filter: (ApplicationCall) -> Boolean = { call: ApplicationCall ->
             val path = call.request.path()
             when {
@@ -30,8 +31,7 @@ class OpenCensusTracer(
                 else -> true
             }
         }
-        var requestBody = false
-        var spanName: (ApplicationCall, RoutingPath) -> String = { call: ApplicationCall, path: RoutingPath ->
+        var spanNameHandler: (ApplicationCall, RoutingPath) -> String = { call: ApplicationCall, path: RoutingPath ->
             "${call.request.httpMethod.value} /${path.parts.map { it.value }.firstOrNull() ?: ""}"
         }
         var requestAttributeHandler: ((ApplicationCall, Span) -> Unit)? = null
@@ -61,7 +61,7 @@ class OpenCensusTracer(
 
         val path = RoutingPath.parse(call.request.path())
 
-        tracer.spanBuilderWithRemoteParent(spanName(call, path), spanContext).apply {
+        tracer.spanBuilderWithRemoteParent(spanNameHandler(call, path), spanContext).apply {
             setSpanKind(Span.Kind.SERVER)
             setRecordEvents(true)
             setSampler(traceSampler)
@@ -93,7 +93,7 @@ class OpenCensusTracer(
             }
     }
 
-    private suspend fun setRequestAttribute(call: ApplicationCall, span: Span, raw: String? = null) {
+    private suspend fun setRequestAttribute(call: ApplicationCall, span: Span) {
         span.attribute(HttpTraceAttributeConstants.HTTP_HOST, call.request.host())
         span.attribute(
             HttpTraceAttributeConstants.HTTP_METHOD,
@@ -105,18 +105,18 @@ class OpenCensusTracer(
             call.request.userAgent() ?: "NoAgent"
         )
         span.attribute(HttpTraceAttributeConstants.HTTP_URL, call.request.uri)
-        requestAttributeHandler?.invoke(call, span)
-        if (requestBody) {
+        if (loggingRequestBody) {
             span.attribute("http.request_body", String(call.receive<ByteArray>()))
         }
+        requestAttributeHandler?.invoke(call, span)
     }
 
     private fun setResponseAttributes(call: ApplicationCall, span: Span) {
         val status = call.response.status()?.value ?: 0
-        responseAttributeHandler?.invoke(call, span)
         span.setStatus(status)
         span.attribute(HttpTraceAttributeConstants.HTTP_STATUS_CODE, status)
         span.attribute(HttpTraceAttributeConstants.HTTP_STATUS_CODE, call.response.status()?.value)
+        responseAttributeHandler?.invoke(call, span)
     }
 
     companion object Feature : ApplicationFeature<Application, Configuration, OpenCensusTracer> {
@@ -130,16 +130,16 @@ class OpenCensusTracer(
         ): OpenCensusTracer {
             val configuration = Configuration().apply(configure)
 
-            if (configuration.requestBody && pipeline.featureOrNull(DoubleReceive) == null) {
+            if (configuration.loggingRequestBody && pipeline.featureOrNull(DoubleReceive) == null) {
                 throw IllegalStateException("Logging payloads requires DoubleReceive feature to be installed")
             }
 
             val feature = OpenCensusTracer(
                 filter = configuration.filter,
-                spanName = configuration.spanName,
+                spanNameHandler = configuration.spanNameHandler,
                 requestAttributeHandler = configuration.requestAttributeHandler,
                 responseAttributeHandler = configuration.responseAttributeHandler,
-                requestBody = configuration.requestBody
+                loggingRequestBody = configuration.loggingRequestBody
             )
             pipeline.intercept(ApplicationCallPipeline.Call) {
                 if (!feature.shouldTracking(call)) return@intercept
